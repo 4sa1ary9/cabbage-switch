@@ -625,15 +625,226 @@ finally:
     }
 }
 
-function Show-CabbageSwitchStatus {
-    $configPath = Join-Path (Get-CabbageCodexHome) 'config.toml'
-    $configProvider = $null
-    if (Test-Path -LiteralPath $configPath) {
-        $line = Get-Content -LiteralPath $configPath -TotalCount 1
-        if ($line -match 'model_provider\s*=\s*"([^"]+)"') {
-            $configProvider = $Matches[1]
+function Repair-CabbageHermesConfig {
+    $configPath = Join-Path $HOME '.hermes\config.yaml'
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        return $null
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    [System.IO.File]::ReadAllLines($configPath) | ForEach-Object { $lines.Add($_) }
+
+    $mcpIndexes = @()
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^mcp_servers\s*:') {
+            $mcpIndexes += $i
         }
     }
+
+    if ($mcpIndexes.Count -le 1) {
+        return $null
+    }
+
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $backupPath = "$configPath.cabbage-switch-$timestamp.bak"
+    Copy-Item -LiteralPath $configPath -Destination $backupPath -Force
+
+    for ($index = $mcpIndexes.Count - 2; $index -ge 0; $index--) {
+        $removeStart = $mcpIndexes[$index]
+        $removeEnd = $lines.Count
+        for ($i = $removeStart + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^[A-Za-z0-9_-]+\s*:') {
+                $removeEnd = $i
+                break
+            }
+        }
+
+        while ($removeEnd -gt $removeStart -and [string]::IsNullOrWhiteSpace($lines[$removeEnd - 1])) {
+            $removeEnd--
+        }
+
+        $lines.RemoveRange($removeStart, $removeEnd - $removeStart)
+    }
+
+    [System.IO.File]::WriteAllLines($configPath, $lines, [System.Text.UTF8Encoding]::new($false))
+    return $backupPath
+}
+
+function Get-CabbageCodexProviderConfigText {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string] $ProviderId
+    )
+
+    $dbPath = Join-Path (Get-CabbageCcSwitchHome) 'cc-switch.db'
+    if (-not (Test-Path -LiteralPath $dbPath)) {
+        throw 'CC Switch database was not found. Configure CC Switch first.'
+    }
+
+    $script = @'
+import json
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+provider_id = sys.argv[2]
+
+conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+try:
+    row = conn.execute(
+        "SELECT settings_config FROM providers WHERE app_type = 'codex' AND id = ?",
+        (provider_id,),
+    ).fetchone()
+    if row is None:
+        print(json.dumps({"found": False, "config": None}))
+    else:
+        settings = json.loads(row[0] or "{}")
+        print(json.dumps({"found": True, "config": settings.get("config")}, ensure_ascii=False))
+finally:
+    conn.close()
+'@
+
+    $result = Invoke-CabbagePythonJson -Script $script -Arguments @($dbPath, $ProviderId)
+    if (-not $result.found) {
+        throw "Codex provider '$ProviderId' was not found in CC Switch."
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string] $result.config)) {
+        throw "Codex provider '$ProviderId' does not have a config payload in CC Switch."
+    }
+
+    return [string] $result.config
+}
+
+function Set-CabbageCodexConfigFromProvider {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string] $ProviderId
+    )
+
+    $configText = Get-CabbageCodexProviderConfigText $ProviderId
+    $codexHome = Get-CabbageCodexHome
+    New-Item -ItemType Directory -Force -Path $codexHome | Out-Null
+
+    $configPath = Join-Path $codexHome 'config.toml'
+    if (Test-Path -LiteralPath $configPath) {
+        $backupDir = Join-Path $codexHome 'backups'
+        New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+        $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $backupPath = Join-Path $backupDir "config.toml.cabbage-switch-$timestamp.bak"
+        Copy-Item -LiteralPath $configPath -Destination $backupPath -Force
+    }
+
+    [System.IO.File]::WriteAllText($configPath, $configText, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Set-CabbageCcSwitchCurrentCodexProvider {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string] $ProviderId
+    )
+
+    $dbPath = Join-Path (Get-CabbageCcSwitchHome) 'cc-switch.db'
+    if (Test-Path -LiteralPath $dbPath) {
+        $script = @'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+provider_id = sys.argv[2]
+
+conn = sqlite3.connect(db_path)
+try:
+    cur = conn.cursor()
+    exists = cur.execute(
+        "SELECT 1 FROM providers WHERE app_type = 'codex' AND id = ?",
+        (provider_id,),
+    ).fetchone() is not None
+    if not exists:
+        raise SystemExit(f"Provider not found: {provider_id}")
+    cur.execute("UPDATE providers SET is_current = 0 WHERE app_type = 'codex'")
+    cur.execute(
+        "UPDATE providers SET is_current = 1 WHERE app_type = 'codex' AND id = ?",
+        (provider_id,),
+    )
+    conn.commit()
+    print("{}")
+finally:
+    conn.close()
+'@
+
+        Invoke-CabbagePythonJson -Script $script -Arguments @($dbPath, $ProviderId) | Out-Null
+    }
+
+    $settingsPath = Join-Path (Get-CabbageCcSwitchHome) 'settings.json'
+    if (Test-Path -LiteralPath $settingsPath) {
+        $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        Copy-Item -LiteralPath $settingsPath -Destination "$settingsPath.cabbage-switch-$timestamp.bak" -Force
+        $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+        $settings.currentProviderCodex = $ProviderId
+        $json = $settings | ConvertTo-Json -Depth 100
+        [System.IO.File]::WriteAllText($settingsPath, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    }
+}
+
+function Get-CabbageCodexConfigProvider {
+    $configPath = Join-Path (Get-CabbageCodexHome) 'config.toml'
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        return $null
+    }
+
+    foreach ($line in Get-Content -LiteralPath $configPath) {
+        if ($line -match '^\s*model_provider\s*=\s*"([^"]+)"') {
+            return $Matches[1]
+        }
+    }
+
+    return 'openai'
+}
+
+function Test-CabbageCodexConfigProvider {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [ValidateSet('openai', 'custom')]
+        [string] $ExpectedProvider
+    )
+
+    return (Get-CabbageCodexConfigProvider) -eq $ExpectedProvider
+}
+
+function Assert-CabbageCodexConfigProvider {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [ValidateSet('openai', 'custom')]
+        [string] $ExpectedProvider
+    )
+
+    $actualProvider = Get-CabbageCodexConfigProvider
+    if (-not (Test-CabbageCodexConfigProvider $ExpectedProvider)) {
+        $displayActual = if ($actualProvider) { $actualProvider } else { '<missing>' }
+        throw "Codex provider switch did not complete. Expected ~/.codex/config.toml model_provider '$ExpectedProvider', found '$displayActual'. History was not synced. Fix the CC Switch error, then rerun this command."
+    }
+}
+
+function Ensure-CabbageCodexProviderSwitch {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $ProviderId,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('openai', 'custom')]
+        [string] $HistoryProvider
+    )
+
+    if (-not (Test-CabbageCodexConfigProvider $HistoryProvider)) {
+        Set-CabbageCodexConfigFromProvider $ProviderId
+    }
+
+    Set-CabbageCcSwitchCurrentCodexProvider $ProviderId
+}
+
+function Show-CabbageSwitchStatus {
+    $configProvider = Get-CabbageCodexConfigProvider
 
     [pscustomobject]@{
         CodexHome       = Get-CabbageCodexHome
@@ -666,12 +877,18 @@ function Z_switch {
 
     if (-not $HistoryOnly) {
         $ccSwitch = Get-CabbageCcSwitchExe
+        Repair-CabbageHermesConfig | Out-Null
+        $global:LASTEXITCODE = $null
         & $ccSwitch -a codex provider switch $switchId
         if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) {
-            throw "CC Switch failed with exit code $LASTEXITCODE."
+            throw "CC Switch failed with exit code $LASTEXITCODE. History was not synced."
         }
+
+        Ensure-CabbageCodexProviderSwitch -ProviderId $switchId -HistoryProvider $historyProvider
     }
 
+    Assert-CabbageCodexConfigProvider $historyProvider
+    Repair-CabbageHermesConfig | Out-Null
     Sync-CodexHistoryProvider -ModelProvider $historyProvider -IncludeArchived:$IncludeArchived
 }
 
