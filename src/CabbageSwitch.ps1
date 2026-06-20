@@ -160,6 +160,26 @@ function Resolve-CabbageCodexProviderSwitchId {
     return $ProviderId
 }
 
+function Get-CabbageModelProviderFromConfigText {
+    param(
+        [Parameter(Position = 0)]
+        [AllowNull()]
+        [string] $ConfigText
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ConfigText)) {
+        return $null
+    }
+
+    foreach ($line in ($ConfigText -split "`r?`n")) {
+        if ($line -match '^\s*model_provider\s*=\s*"([^"]+)"') {
+            return $Matches[1]
+        }
+    }
+
+    return $null
+}
+
 function Resolve-CabbageHistoryProvider {
     param(
         [Parameter(Mandatory = $true, Position = 0)]
@@ -169,6 +189,20 @@ function Resolve-CabbageHistoryProvider {
     $switchId = Resolve-CabbageCodexProviderSwitchId $ProviderId
     if ($switchId -eq 'default') {
         return 'openai'
+    }
+
+    try {
+        $configProvider = Get-CabbageModelProviderFromConfigText (Get-CabbageCodexProviderConfigText $switchId)
+        if (-not [string]::IsNullOrWhiteSpace($configProvider)) {
+            return $configProvider
+        }
+    }
+    catch {
+    }
+
+    $currentProvider = Get-CabbageCodexConfigProvider
+    if ((Resolve-CabbageConfigProviderHistoryBucket $currentProvider) -eq 'custom') {
+        return $currentProvider
     }
 
     return 'custom'
@@ -251,70 +285,52 @@ function Set-CabbageJsonlSessionProviderInPlace {
         [string] $Path,
 
         [Parameter(Mandatory = $true, Position = 1)]
-        [ValidateSet('openai', 'custom')]
         [string] $ModelProvider
     )
 
-    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
-    try {
-        $bytes = [byte[]]::new($stream.Length)
-        $read = $stream.Read($bytes, 0, $bytes.Length)
-        if ($read -le 0) {
-            return $false
-        }
-
-        $newlineIndex = [Array]::IndexOf($bytes, [byte][char]"`n")
-        if ($newlineIndex -lt 0) {
-            $newlineIndex = $read
-        }
-
-        $needle = [System.Text.Encoding]::UTF8.GetBytes('"model_provider":"')
-        $value = [System.Text.Encoding]::UTF8.GetBytes($ModelProvider)
-        $offset = -1
-
-        for ($i = 0; $i -le ($newlineIndex - $needle.Length); $i++) {
-            $matches = $true
-            for ($j = 0; $j -lt $needle.Length; $j++) {
-                if ($bytes[$i + $j] -ne $needle[$j]) {
-                    $matches = $false
-                    break
-                }
-            }
-
-            if ($matches) {
-                $offset = $i + $needle.Length
-                break
-            }
-        }
-
-        if ($offset -lt 0) {
-            return $false
-        }
-
-        $endOffset = $offset
-        while ($endOffset -lt $newlineIndex -and $bytes[$endOffset] -ne [byte][char]'"') {
-            $endOffset++
-        }
-
-        if (($endOffset - $offset) -ne $value.Length) {
-            throw "Cannot update model_provider in place because the existing value length differs from '$ModelProvider'."
-        }
-
-        $stream.Position = $offset
-        $stream.Write($value, 0, $value.Length)
-        $stream.Flush()
-        return $true
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $text = [System.IO.File]::ReadAllText($Path, $encoding)
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $false
     }
-    finally {
-        $stream.Dispose()
+
+    $newline = [System.Text.RegularExpressions.Regex]::Match($text, "`r?`n")
+    if ($newline.Success) {
+        $firstLine = $text.Substring(0, $newline.Index)
+        $lineEnding = $newline.Value
+        $rest = $text.Substring($newline.Index + $newline.Length)
     }
+    else {
+        $firstLine = $text
+        $lineEnding = ''
+        $rest = ''
+    }
+
+    if ([string]::IsNullOrWhiteSpace($firstLine)) {
+        return $false
+    }
+
+    $meta = $firstLine | ConvertFrom-Json -ErrorAction Stop
+    if ($meta.type -ne 'session_meta' -or -not $meta.payload) {
+        return $false
+    }
+
+    if ($meta.payload.PSObject.Properties.Match('model_provider').Count -eq 0) {
+        $meta.payload | Add-Member -NotePropertyName model_provider -NotePropertyValue $ModelProvider
+    }
+    else {
+        $meta.payload.model_provider = $ModelProvider
+    }
+
+    $updatedFirstLine = $meta | ConvertTo-Json -Depth 100 -Compress
+    [System.IO.File]::WriteAllText($Path, $updatedFirstLine + $lineEnding + $rest, $encoding)
+    return $true
 }
 
 function Sync-CabbageCodexJsonlHistoryProvider {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('openai', 'custom')]
         [string] $ModelProvider,
 
         [switch] $IncludeArchived
@@ -375,6 +391,9 @@ function Sync-CabbageCodexJsonlHistoryProvider {
                     $item.LastAccessTimeUtc = $lastAccessTimeUtc
                     $changed++
                 }
+                elseif ($WhatIfPreference) {
+                    $changed++
+                }
             }
             catch {
                 $errors++
@@ -399,7 +418,6 @@ function Sync-CabbageCodexStateProvider {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('openai', 'custom')]
         [string] $ModelProvider,
 
         [switch] $IncludeArchived
@@ -427,6 +445,7 @@ import sys
 db_path = sys.argv[1]
 model_provider = sys.argv[2]
 include_archived = sys.argv[3] == "1"
+should_write = sys.argv[4] == "1"
 
 conn = sqlite3.connect(db_path)
 try:
@@ -434,25 +453,44 @@ try:
     if include_archived:
         total = cur.execute("SELECT COUNT(*) FROM threads").fetchone()[0]
         changed = cur.execute(
-            "SELECT COUNT(*) FROM threads WHERE model_provider <> ?",
+            """
+            SELECT COUNT(*) FROM threads
+            WHERE model_provider IS NULL OR model_provider <> ?
+            """,
             (model_provider,),
         ).fetchone()[0]
-        cur.execute(
-            "UPDATE threads SET model_provider = ? WHERE model_provider <> ?",
-            (model_provider, model_provider),
-        )
+        if should_write:
+            cur.execute(
+                """
+                UPDATE threads
+                SET model_provider = ?
+                WHERE model_provider IS NULL OR model_provider <> ?
+                """,
+                (model_provider, model_provider),
+            )
     else:
         total = cur.execute("SELECT COUNT(*) FROM threads WHERE archived = 0").fetchone()[0]
         changed = cur.execute(
-            "SELECT COUNT(*) FROM threads WHERE archived = 0 AND model_provider <> ?",
+            """
+            SELECT COUNT(*) FROM threads
+            WHERE archived = 0
+              AND (model_provider IS NULL OR model_provider <> ?)
+            """,
             (model_provider,),
         ).fetchone()[0]
-        cur.execute(
-            "UPDATE threads SET model_provider = ? WHERE archived = 0 AND model_provider <> ?",
-            (model_provider, model_provider),
-        )
+        if should_write:
+            cur.execute(
+                """
+                UPDATE threads
+                SET model_provider = ?
+                WHERE archived = 0
+                  AND (model_provider IS NULL OR model_provider <> ?)
+                """,
+                (model_provider, model_provider),
+            )
 
-    conn.commit()
+    if should_write:
+        conn.commit()
     print(json.dumps({
         "scanned": total,
         "changed": changed,
@@ -464,19 +502,21 @@ finally:
 
     $backupPath = $null
     try {
-        if ($PSCmdlet.ShouldProcess($databasePath, "set threads.model_provider to $ModelProvider")) {
+        $result = Invoke-CabbagePythonJson -Script $script -Arguments @($databasePath, $ModelProvider, $(if ($IncludeArchived) { '1' } else { '0' }), '0')
+        if ([int] $result.changed -gt 0 -and $PSCmdlet.ShouldProcess($databasePath, "set threads.model_provider to $ModelProvider")) {
             $backupPath = Backup-CabbageCodexStateDatabase $databasePath
-            $result = Invoke-CabbagePythonJson -Script $script -Arguments @($databasePath, $ModelProvider, $(if ($IncludeArchived) { '1' } else { '0' }))
-            return [pscustomobject]@{
-                Store           = 'state.sqlite'
-                ModelProvider   = $ModelProvider
-                Scanned         = [int] $result.scanned
-                Changed         = [int] $result.changed
-                Skipped         = [int] $result.skipped
-                Errors          = 0
-                IncludeArchived = [bool] $IncludeArchived
-                BackupPath      = $backupPath
-            }
+            $result = Invoke-CabbagePythonJson -Script $script -Arguments @($databasePath, $ModelProvider, $(if ($IncludeArchived) { '1' } else { '0' }), '1')
+        }
+
+        return [pscustomobject]@{
+            Store           = 'state.sqlite'
+            ModelProvider   = $ModelProvider
+            Scanned         = [int] $result.scanned
+            Changed         = [int] $result.changed
+            Skipped         = [int] $result.skipped
+            Errors          = 0
+            IncludeArchived = [bool] $IncludeArchived
+            BackupPath      = $backupPath
         }
     }
     catch {
@@ -509,7 +549,6 @@ function Sync-CodexHistoryProvider {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true, Position = 0)]
-        [ValidateSet('openai', 'custom')]
         [string] $ModelProvider,
 
         [switch] $IncludeArchived
@@ -824,18 +863,20 @@ function Resolve-CabbageConfigProviderHistoryBucket {
 function Test-CabbageCodexConfigProvider {
     param(
         [Parameter(Mandatory = $true, Position = 0)]
-        [ValidateSet('openai', 'custom')]
         [string] $ExpectedProvider
     )
 
     $actualProvider = Get-CabbageCodexConfigProvider
-    return (Resolve-CabbageConfigProviderHistoryBucket $actualProvider) -eq $ExpectedProvider
+    if ($ExpectedProvider -in @('openai', 'custom')) {
+        return (Resolve-CabbageConfigProviderHistoryBucket $actualProvider) -eq $ExpectedProvider
+    }
+
+    return $actualProvider -eq $ExpectedProvider
 }
 
 function Assert-CabbageCodexConfigProvider {
     param(
         [Parameter(Mandatory = $true, Position = 0)]
-        [ValidateSet('openai', 'custom')]
         [string] $ExpectedProvider
     )
 
@@ -852,7 +893,6 @@ function Ensure-CabbageCodexProviderSwitch {
         [string] $ProviderId,
 
         [Parameter(Mandatory = $true)]
-        [ValidateSet('openai', 'custom')]
         [string] $HistoryProvider
     )
 
@@ -875,6 +915,7 @@ function Show-CabbageSwitchStatus {
         CodexHistoryBucket  = $configHistoryBucket
         StateDatabase       = Get-CabbageCodexStateDatabase
         ApiProviderId       = $(try { Resolve-CabbageCodexApiProviderId } catch { $null })
+        ApiHistoryProvider  = $(try { Resolve-CabbageHistoryProvider api } catch { $null })
     }
 
     Get-CabbageCodexProviders |
@@ -886,10 +927,12 @@ function Show-CabbageSwitchStatus {
 }
 
 function Z_switch {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory = $true, Position = 0)]
         [string] $ProviderId,
 
+        [switch] $SwitchProvider,
         [switch] $HistoryOnly,
         [switch] $IncludeArchived
     )
@@ -897,33 +940,60 @@ function Z_switch {
     $switchId = Resolve-CabbageCodexProviderSwitchId $ProviderId
     $historyProvider = Resolve-CabbageHistoryProvider $ProviderId
 
-    if (-not $HistoryOnly) {
-        $ccSwitch = Get-CabbageCcSwitchExe
-        Repair-CabbageHermesConfig | Out-Null
-        $global:LASTEXITCODE = $null
-        & $ccSwitch -a codex provider switch $switchId
-        if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) {
-            throw "CC Switch failed with exit code $LASTEXITCODE. History was not synced."
-        }
-
-        Ensure-CabbageCodexProviderSwitch -ProviderId $switchId -HistoryProvider $historyProvider
+    if ($HistoryOnly) {
+        Write-Verbose '-HistoryOnly is now the default behavior; ignoring the switch.'
     }
 
-    Assert-CabbageCodexConfigProvider $historyProvider
-    Repair-CabbageHermesConfig | Out-Null
+    if ($SwitchProvider) {
+        if ($PSCmdlet.ShouldProcess("Codex provider '$switchId'", 'switch CC Switch provider and Codex config')) {
+            $ccSwitch = Get-CabbageCcSwitchExe
+            Repair-CabbageHermesConfig | Out-Null
+            $global:LASTEXITCODE = $null
+            & $ccSwitch -a codex provider switch $switchId
+            if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) {
+                throw "CC Switch failed with exit code $LASTEXITCODE. History was not synced."
+            }
+
+            Ensure-CabbageCodexProviderSwitch -ProviderId $switchId -HistoryProvider $historyProvider
+            Assert-CabbageCodexConfigProvider $historyProvider
+            Repair-CabbageHermesConfig | Out-Null
+        }
+    }
+
     Sync-CodexHistoryProvider -ModelProvider $historyProvider -IncludeArchived:$IncludeArchived
 }
 
 function codex-openai {
-    Z_switch default @args
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [switch] $SwitchProvider,
+        [switch] $HistoryOnly,
+        [switch] $IncludeArchived
+    )
+
+    Z_switch default -SwitchProvider:$SwitchProvider -HistoryOnly:$HistoryOnly -IncludeArchived:$IncludeArchived -WhatIf:$WhatIfPreference
 }
 
 function codex-api {
-    Z_switch api @args
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [switch] $SwitchProvider,
+        [switch] $HistoryOnly,
+        [switch] $IncludeArchived
+    )
+
+    Z_switch api -SwitchProvider:$SwitchProvider -HistoryOnly:$HistoryOnly -IncludeArchived:$IncludeArchived -WhatIf:$WhatIfPreference
 }
 
 function codex-default {
-    codex-openai @args
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [switch] $SwitchProvider,
+        [switch] $HistoryOnly,
+        [switch] $IncludeArchived
+    )
+
+    codex-openai -SwitchProvider:$SwitchProvider -HistoryOnly:$HistoryOnly -IncludeArchived:$IncludeArchived -WhatIf:$WhatIfPreference
 }
 
 Set-Alias -Name cs-status -Value Show-CabbageSwitchStatus -Force

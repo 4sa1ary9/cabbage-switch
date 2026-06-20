@@ -1,20 +1,22 @@
 # Cabbage Switch
 
-PowerShell helpers for switching Codex providers through CC Switch while keeping Codex Desktop history visible under the selected provider.
+PowerShell helpers for switching Codex Desktop history between Codex providers. Provider switching through CC Switch is still available, but history-only sync is the default.
 
 ## Goal
 
 CC Switch can switch Codex between an official OpenAI login provider and an API/proxy provider, but Codex Desktop history is also indexed locally. If only `~/.codex/config.toml` changes, the desktop sidebar may appear empty after switching providers.
 
-Cabbage Switch solves that by switching the provider and synchronizing both local history stores:
+Cabbage Switch solves that by synchronizing both local history stores:
 
 - `~/.codex/sessions/**/*.jsonl`
 - `~/.codex/state_*.sqlite`, especially `threads.model_provider`
 
-The two history buckets are:
+The default commands only move history metadata:
 
 - `openai`: Codex official login / GPT Plus account
-- `custom`: CC Switch API/proxy provider
+- the API/proxy provider's actual `model_provider` value, such as `tec-do` or `custom`
+
+If you also want Cabbage Switch to switch the active provider through CC Switch, pass `-SwitchProvider` explicitly.
 
 ## Requirements
 
@@ -67,23 +69,16 @@ It also adds a small managed block to your PowerShell profile so the commands ar
 
 ## Common Commands
 
-Switch to the API/proxy provider and move active desktop history to the `custom` bucket:
+Move active desktop history to the API/proxy provider's actual Codex `model_provider`:
 
 ```powershell
 codex-api
 ```
 
-Switch to the official OpenAI login provider and move active desktop history to the `openai` bucket:
+Move active desktop history to the official OpenAI login provider:
 
 ```powershell
 codex-openai
-```
-
-Only synchronize history after switching in the CC Switch GUI:
-
-```powershell
-codex-api -HistoryOnly
-codex-openai -HistoryOnly
 ```
 
 Include archived Codex threads as well:
@@ -91,6 +86,13 @@ Include archived Codex threads as well:
 ```powershell
 codex-api -IncludeArchived
 codex-openai -IncludeArchived
+```
+
+Switch the active provider through CC Switch and then sync history:
+
+```powershell
+codex-api -SwitchProvider
+codex-openai -SwitchProvider
 ```
 
 Inspect current detection and history state:
@@ -125,7 +127,7 @@ It chooses:
 2. otherwise a non-`default` provider whose id/name looks like `api`, `custom`, `proxy`, `中转`, or `转发`;
 3. otherwise the first non-`default` Codex provider.
 
-This keeps the script portable across computers where CC Switch generated a different provider id.
+For API/proxy history, Cabbage Switch reads that provider's Codex config payload and uses its actual `model_provider` value. This keeps the script portable across computers where CC Switch generated a different provider id or a custom provider name.
 
 ## Safety
 
@@ -143,10 +145,10 @@ If Codex Desktop is already open, the sync can still update the index, but you u
 
 If history still does not appear:
 
-1. Run `cs-status` and check that `state.sqlite` and `jsonl` counts match the provider you selected.
+1. Run `cs-status` and check that `state.sqlite` and `jsonl` counts match `CodexConfig` or `ApiHistoryProvider`.
 2. Fully exit Codex Desktop from the tray or Task Manager.
 3. Reopen Codex Desktop.
-4. Run `codex-api -HistoryOnly` or `codex-openai -HistoryOnly` again.
+4. Run `codex-api` or `codex-openai` again.
 
 If the API provider is not detected, open CC Switch once and confirm Codex has a non-default API/proxy provider configured.
 

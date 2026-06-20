@@ -71,8 +71,10 @@ if (-not $NoProfileUpdate) {
 }
 Write-Host ''
 Write-Host 'Available commands:'
-Write-Host '  codex-api [-HistoryOnly] [-IncludeArchived]'
-Write-Host '  codex-openai [-HistoryOnly] [-IncludeArchived]'
+Write-Host '  codex-api [-IncludeArchived]'
+Write-Host '  codex-openai [-IncludeArchived]'
+Write-Host '  codex-api -SwitchProvider [-IncludeArchived]'
+Write-Host '  codex-openai -SwitchProvider [-IncludeArchived]'
 Write-Host '  Show-CabbageSwitchStatus'
 Write-Host ''
 Write-Host 'Run this once in the current shell, or open a new PowerShell window:'
