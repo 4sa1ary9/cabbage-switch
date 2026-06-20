@@ -392,6 +392,7 @@ function Sync-CabbageCodexJsonlHistoryProvider {
     $changed = 0
     $skipped = 0
     $errors = 0
+    $locked = 0
 
     foreach ($root in $roots) {
         if (-not (Test-Path -LiteralPath $root)) {
@@ -442,10 +443,25 @@ function Sync-CabbageCodexJsonlHistoryProvider {
                 }
             }
             catch {
-                $errors++
-                Write-Warning ("Failed to update {0}: {1}" -f $file.FullName, $_.Exception.Message)
+                $msg = [string] $_.Exception.Message
+                $isLocked = $msg -match '正由另一进程使用|used by another process|being used by another'
+                if ($isLocked) {
+                    $locked++
+                    Write-Warning ("Locked by Codex (still running): {0}" -f $file.FullName)
+                }
+                else {
+                    $errors++
+                    Write-Warning ("Failed to update {0}: {1}" -f $file.FullName, $msg)
+                }
             }
         }
+    }
+
+    if ($locked -gt 0) {
+        Write-Host ''
+        Write-Host ("{0} file(s) are locked by Codex Desktop and were not moved." -f $locked) -ForegroundColor Yellow
+        Write-Host 'Fully exit Codex Desktop (tray -> Quit, or Task Manager), then rerun this command.' -ForegroundColor Yellow
+        Write-Host 'Already-moved files are skipped on rerun; only the locked ones will update.' -ForegroundColor Yellow
     }
 
     [pscustomobject]@{
@@ -455,6 +471,7 @@ function Sync-CabbageCodexJsonlHistoryProvider {
         Changed         = $changed
         Skipped         = $skipped
         Errors          = $errors
+        Locked          = $locked
         IncludeArchived = [bool] $IncludeArchived
         BackupPath      = $null
     }
@@ -1018,27 +1035,45 @@ function Show-CabbageSwitchGuidance {
         return
     }
 
-    Write-Host 'Detected Codex providers:' -ForegroundColor Cyan
+    Write-Host 'Detected Codex providers:'
+    Write-Host ('  {0,-10} {1,-22} {2}' -f 'id', 'name', 'codex_provider') -ForegroundColor Yellow
     foreach ($p in $providers) {
         $label = [string] $p.name
         if ([string]::IsNullOrWhiteSpace($label)) {
             $label = $p.id
         }
+        $shortId = if ($p.id.Length -gt 8) { $p.id.Substring(0, 8) } else { $p.id }
         $marker = if ($p.is_current) { '   [current]' } else { '' }
-        Write-Host ("  {0,-18} {1,-22} -> {2}{3}" -f $p.id, $label, $p.history_provider, $marker)
+        Write-Host ("  {0,-10} {1,-22} {2}{3}" -f $shortId, $label, $p.history_provider, $marker)
     }
 
     Write-Host ''
     Write-Host 'Move active history to a provider bucket (history only, the default):' -ForegroundColor Cyan
     foreach ($p in $providers) {
-        Write-Host ("  cabbage-switch {0}" -f $p.id)
+        $hint = $p.model_provider
+        if ([string]::IsNullOrWhiteSpace($hint)) {
+            $hint = $p.id
+        }
+        Write-Host '  use ' -NoNewline
+        Write-Host ("cabbage-switch {0}" -f $hint) -NoNewline -ForegroundColor Magenta
+        Write-Host '   or   ' -NoNewline
+        Write-Host ("cswitch {0}" -f $hint) -NoNewline -ForegroundColor Magenta
+        Write-Host (" to move history to {0} provider" -f $hint)
     }
     Write-Host ''
-    Write-Host 'Add -SwitchProvider to also switch the active provider through CC Switch.'
-    Write-Host 'Add -IncludeArchived to also move archived threads.'
-    Write-Host 'Add -WhatIf to preview without changing anything.'
+    Write-Host 'Add ' -NoNewline
+    Write-Host '-SwitchProvider' -NoNewline -ForegroundColor Cyan
+    Write-Host ' to also switch the active provider through CC Switch.'
+    Write-Host 'Add ' -NoNewline
+    Write-Host '-IncludeArchived' -NoNewline -ForegroundColor Cyan
+    Write-Host ' to also move archived threads.'
+    Write-Host 'Add ' -NoNewline
+    Write-Host '-WhatIf' -NoNewline -ForegroundColor Cyan
+    Write-Host ' to preview without changing anything.'
     Write-Host ''
-    Write-Host 'Run cs-status for full path and history-count details.'
+    Write-Host 'Run ' -NoNewline
+    Write-Host 'cs-status' -NoNewline -ForegroundColor Cyan
+    Write-Host ' for full path and history-count details.'
 }
 
 function cabbage-switch {
@@ -1068,5 +1103,5 @@ function cabbage-switch {
     Z_switch $Provider -SwitchProvider:$SwitchProvider -HistoryOnly:$HistoryOnly -IncludeArchived:$IncludeArchived -WhatIf:$WhatIfPreference
 }
 
-Set-Alias -Name c-switch -Value cabbage-switch -Force
+Set-Alias -Name cswitch -Value cabbage-switch -Force
 Set-Alias -Name cs-status -Value Show-CabbageSwitchStatus -Force

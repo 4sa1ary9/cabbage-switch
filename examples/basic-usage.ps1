@@ -6,7 +6,7 @@ Show-CabbageSwitchStatus
 # List every Codex provider and the command to move history into it.
 cabbage-switch
 # short alias:
-c-switch
+cswitch
 
 # Move active desktop history to a provider bucket.
 # <provider> can be the provider id, display name, or model_provider value.

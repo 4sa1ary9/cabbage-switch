@@ -69,15 +69,16 @@ First, see what Cabbage Switch detected on this machine:
 ```powershell
 cabbage-switch
 # short alias:
-c-switch
+cswitch
 ```
 
 This prints each Codex provider found in CC Switch and the command to move history into it, for example:
 
 ```text
 Detected Codex providers:
-  default            OpenAI                 -> openai
-  tec-do             my api proxy           -> tec-do   [current]
+  id         name                   history_provider
+  default    OpenAI                 openai
+  d7486227   my api proxy           tec-do   [current]
 
 Move active history to a provider bucket (history only, the default):
   cabbage-switch default
@@ -151,6 +152,8 @@ If history still does not appear:
 4. Run `cabbage-switch <provider>` again for the bucket you want history in.
 
 If a provider is not listed by `cabbage-switch`, open CC Switch once and confirm it is a Codex provider. Only Codex providers appear.
+
+If some JSONL files report `Locked` in the summary, Codex Desktop was still running and holding them open. Fully exit Codex Desktop (tray Quit, or end the `Codex` processes in Task Manager) and rerun the same command. Already-moved files are skipped on rerun; only the locked ones update.
 
 ## Project Layout
 

@@ -68,6 +68,18 @@ Cabbage Switch:
 
 This rewrite supports provider names with different lengths, such as moving from `custom` to `tec-do`.
 
+### Files locked by Codex Desktop
+
+When Codex Desktop is running, it holds open handles on the session files it is actively writing. Cabbage Switch cannot rewrite those, and `[System.IO.File]::ReadAllText` raises a "file is being used by another process" error.
+
+Rather than mixing these into a generic error count, Cabbage Switch reports them separately:
+
+- each locked file prints one short line: `Locked by Codex (still running): <path>`
+- the summary object gains a `Locked` count alongside `Errors`
+- when `Locked` is non-zero, a yellow hint block reminds the user to fully exit Codex Desktop and rerun the same command
+
+Locked files are not moved on this run. The update is idempotent, so rerunning after quitting Codex only touches the files that were previously locked.
+
 ## SQLite history index updates
 
 Codex Desktop also keeps an indexed view of threads in a local SQLite database:

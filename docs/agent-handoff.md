@@ -27,7 +27,7 @@ Load the installed script from PowerShell:
 
 Commands:
 
-- `cabbage-switch` (alias `c-switch`): with no argument, prints each detected Codex provider and the command to move history into it. With a provider argument, moves active Codex history to that provider's `model_provider` bucket.
+- `cabbage-switch` (alias `cswitch`): with no argument, prints each detected Codex provider and the command to move history into it. With a provider argument, moves active Codex history to that provider's `model_provider` bucket.
 - `cs-status` / `Show-CabbageSwitchStatus`: show detected paths, CC Switch providers, and history counts.
 
 Options:
@@ -173,6 +173,12 @@ History lands in `custom` even though the Codex config uses a custom provider na
 - Check `Resolve-CabbageHistoryProvider <provider>`.
 - Inspect the CC Switch provider config in `~\.cc-switch\cc-switch.db`.
 - The provider config should contain a `model_provider = "..."` line.
+
+JSONL sync reports `Locked` files:
+
+- Codex Desktop was still running and held open handles on those session files.
+- The JSONL summary separates `Locked` from `Errors`; locked files print one short line each plus a yellow hint block.
+- Fully exit Codex Desktop, then rerun the same command. The update is idempotent — already-moved files are skipped, only the locked ones update.
 
 PowerShell command is not found:
 
