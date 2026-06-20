@@ -802,6 +802,25 @@ function Get-CabbageCodexConfigProvider {
     return 'openai'
 }
 
+function Resolve-CabbageConfigProviderHistoryBucket {
+    param(
+        [Parameter(Position = 0)]
+        [AllowNull()]
+        [string] $ConfigProvider
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ConfigProvider)) {
+        return $null
+    }
+
+    $key = $ConfigProvider.ToLowerInvariant()
+    if ($key -in @('default', 'openai', 'oai', 'official')) {
+        return 'openai'
+    }
+
+    return 'custom'
+}
+
 function Test-CabbageCodexConfigProvider {
     param(
         [Parameter(Mandatory = $true, Position = 0)]
@@ -809,7 +828,8 @@ function Test-CabbageCodexConfigProvider {
         [string] $ExpectedProvider
     )
 
-    return (Get-CabbageCodexConfigProvider) -eq $ExpectedProvider
+    $actualProvider = Get-CabbageCodexConfigProvider
+    return (Resolve-CabbageConfigProviderHistoryBucket $actualProvider) -eq $ExpectedProvider
 }
 
 function Assert-CabbageCodexConfigProvider {
@@ -845,14 +865,16 @@ function Ensure-CabbageCodexProviderSwitch {
 
 function Show-CabbageSwitchStatus {
     $configProvider = Get-CabbageCodexConfigProvider
+    $configHistoryBucket = Resolve-CabbageConfigProviderHistoryBucket $configProvider
 
     [pscustomobject]@{
-        CodexHome       = Get-CabbageCodexHome
-        CcSwitchHome    = Get-CabbageCcSwitchHome
-        CcSwitchExe     = $(try { Get-CabbageCcSwitchExe } catch { $null })
-        CodexConfig     = $configProvider
-        StateDatabase   = Get-CabbageCodexStateDatabase
-        ApiProviderId   = $(try { Resolve-CabbageCodexApiProviderId } catch { $null })
+        CodexHome           = Get-CabbageCodexHome
+        CcSwitchHome        = Get-CabbageCcSwitchHome
+        CcSwitchExe         = $(try { Get-CabbageCcSwitchExe } catch { $null })
+        CodexConfig         = $configProvider
+        CodexHistoryBucket  = $configHistoryBucket
+        StateDatabase       = Get-CabbageCodexStateDatabase
+        ApiProviderId       = $(try { Resolve-CabbageCodexApiProviderId } catch { $null })
     }
 
     Get-CabbageCodexProviders |
