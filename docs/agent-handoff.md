@@ -43,6 +43,7 @@ Options:
 - `scripts/install.ps1`: copies `src/CabbageSwitch.ps1` to `~\.cabbage-switch\CabbageSwitch.ps1` and adds the profile loading block.
 - `README.md`: user-facing install and command reference.
 - `examples/basic-usage.ps1`: short command examples.
+- `docs/how-it-works.md`: explanation of history sync and `-SwitchProvider` internals.
 - `docs/restore.md`: restore procedure for SQLite backups.
 - `docs/agent-handoff.md`: this maintainer handoff.
 

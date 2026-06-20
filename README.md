@@ -18,6 +18,8 @@ The default commands only move history metadata:
 
 If you also want Cabbage Switch to switch the active provider through CC Switch, pass `-SwitchProvider` explicitly.
 
+For the implementation details, see [How Cabbage Switch Works](docs/how-it-works.md).
+
 ## Requirements
 
 - Windows PowerShell or PowerShell 7
@@ -158,5 +160,6 @@ If the API provider is not detected, open CC Switch once and confirm Codex has a
 src/CabbageSwitch.ps1      Core PowerShell functions
 scripts/install.ps1        One-step installer
 examples/basic-usage.ps1   Daily usage examples
+docs/how-it-works.md       History and provider switching internals
 docs/restore.md            Restore notes
 ```
