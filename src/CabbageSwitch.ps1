@@ -69,6 +69,7 @@ function Get-CabbageCodexProviders {
 
     $script = @'
 import json
+import re
 import sqlite3
 import sys
 
@@ -77,22 +78,41 @@ conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 try:
     cur = conn.cursor()
     rows = cur.execute("""
-        SELECT id, name, category, provider_type, is_current, sort_index
+        SELECT id, name, category, provider_type, is_current, sort_index, settings_config
         FROM providers
         WHERE app_type = 'codex'
         ORDER BY sort_index IS NULL, sort_index, name
     """).fetchall()
-    print(json.dumps([
-        {
-            "id": row[0],
+
+    def history_bucket(provider_id, model_provider):
+        mp = (model_provider or "").lower()
+        if provider_id == "default" or mp in ("default", "openai", "oai", "official"):
+            return "openai"
+        if model_provider:
+            return model_provider
+        return "custom"
+
+    result = []
+    for row in rows:
+        provider_id = row[0]
+        try:
+            settings = json.loads(row[6] or "{}")
+        except Exception:
+            settings = {}
+        config_text = settings.get("config") or ""
+        match = re.search(r'^\s*model_provider\s*=\s*"([^"]+)"', config_text, re.M)
+        model_provider = match.group(1) if match else None
+        result.append({
+            "id": provider_id,
             "name": row[1],
             "category": row[2],
             "provider_type": row[3],
             "is_current": bool(row[4]),
             "sort_index": row[5],
-        }
-        for row in rows
-    ], ensure_ascii=False))
+            "model_provider": model_provider,
+            "history_provider": history_bucket(provider_id, model_provider),
+        })
+    print(json.dumps(result, ensure_ascii=False))
 finally:
     conn.close()
 '@
@@ -150,7 +170,8 @@ function Resolve-CabbageCodexProviderSwitchId {
         $providers |
             Where-Object {
                 $_.id -eq $ProviderId -or
-                ([string] $_.name).Equals($ProviderId, [System.StringComparison]::OrdinalIgnoreCase)
+                ([string] $_.name).Equals($ProviderId, [System.StringComparison]::OrdinalIgnoreCase) -or
+                ([string] $_.model_provider).Equals($ProviderId, [System.StringComparison]::OrdinalIgnoreCase)
             }
     ) | Select-Object -First 1
     if ($matched) {
@@ -158,6 +179,31 @@ function Resolve-CabbageCodexProviderSwitchId {
     }
 
     return $ProviderId
+}
+
+function Test-CabbageCodexProviderKnown {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string] $ProviderId
+    )
+
+    $key = $ProviderId.ToLowerInvariant()
+    if ($key -in @('default', 'openai', 'oai', 'official')) {
+        return $true
+    }
+
+    $providers = @(Get-CabbageCodexProviders)
+    if ($key -in @('api', 'custom', 'proxy')) {
+        return (@($providers | Where-Object { $_.id -ne 'default' })).Count -gt 0
+    }
+
+    foreach ($provider in $providers) {
+        if ($provider.id -eq $ProviderId) { return $true }
+        if (([string] $provider.name).Equals($ProviderId, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+        if (([string] $provider.model_provider).Equals($ProviderId, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+
+    return $false
 }
 
 function Get-CabbageModelProviderFromConfigText {
@@ -963,37 +1009,64 @@ function Z_switch {
     Sync-CodexHistoryProvider -ModelProvider $historyProvider -IncludeArchived:$IncludeArchived
 }
 
-function codex-openai {
+function Show-CabbageSwitchGuidance {
+    $providers = @(Get-CabbageCodexProviders)
+
+    if ($providers.Count -eq 0) {
+        Write-Host 'No Codex providers were found in CC Switch.' -ForegroundColor Yellow
+        Write-Host 'Open CC Switch and add at least one Codex provider, then rerun cabbage-switch.'
+        return
+    }
+
+    Write-Host 'Detected Codex providers:' -ForegroundColor Cyan
+    foreach ($p in $providers) {
+        $label = [string] $p.name
+        if ([string]::IsNullOrWhiteSpace($label)) {
+            $label = $p.id
+        }
+        $marker = if ($p.is_current) { '   [current]' } else { '' }
+        Write-Host ("  {0,-18} {1,-22} -> {2}{3}" -f $p.id, $label, $p.history_provider, $marker)
+    }
+
+    Write-Host ''
+    Write-Host 'Move active history to a provider bucket (history only, the default):' -ForegroundColor Cyan
+    foreach ($p in $providers) {
+        Write-Host ("  cabbage-switch {0}" -f $p.id)
+    }
+    Write-Host ''
+    Write-Host 'Add -SwitchProvider to also switch the active provider through CC Switch.'
+    Write-Host 'Add -IncludeArchived to also move archived threads.'
+    Write-Host 'Add -WhatIf to preview without changing anything.'
+    Write-Host ''
+    Write-Host 'Run cs-status for full path and history-count details.'
+}
+
+function cabbage-switch {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
+        [Parameter(Position = 0)]
+        [string] $Provider,
+
         [switch] $SwitchProvider,
         [switch] $HistoryOnly,
         [switch] $IncludeArchived
     )
 
-    Z_switch default -SwitchProvider:$SwitchProvider -HistoryOnly:$HistoryOnly -IncludeArchived:$IncludeArchived -WhatIf:$WhatIfPreference
+    if ([string]::IsNullOrWhiteSpace($Provider)) {
+        Show-CabbageSwitchGuidance
+        return
+    }
+
+    if (-not (Test-CabbageCodexProviderKnown $Provider)) {
+        Write-Warning ("Provider '{0}' is not a detected Codex provider in CC Switch." -f $Provider)
+        Write-Warning 'History was not changed.'
+        Write-Host ''
+        Show-CabbageSwitchGuidance
+        return
+    }
+
+    Z_switch $Provider -SwitchProvider:$SwitchProvider -HistoryOnly:$HistoryOnly -IncludeArchived:$IncludeArchived -WhatIf:$WhatIfPreference
 }
 
-function codex-api {
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param(
-        [switch] $SwitchProvider,
-        [switch] $HistoryOnly,
-        [switch] $IncludeArchived
-    )
-
-    Z_switch api -SwitchProvider:$SwitchProvider -HistoryOnly:$HistoryOnly -IncludeArchived:$IncludeArchived -WhatIf:$WhatIfPreference
-}
-
-function codex-default {
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param(
-        [switch] $SwitchProvider,
-        [switch] $HistoryOnly,
-        [switch] $IncludeArchived
-    )
-
-    codex-openai -SwitchProvider:$SwitchProvider -HistoryOnly:$HistoryOnly -IncludeArchived:$IncludeArchived -WhatIf:$WhatIfPreference
-}
-
+Set-Alias -Name c-switch -Value cabbage-switch -Force
 Set-Alias -Name cs-status -Value Show-CabbageSwitchStatus -Force

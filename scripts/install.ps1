@@ -71,11 +71,10 @@ if (-not $NoProfileUpdate) {
 }
 Write-Host ''
 Write-Host 'Available commands:'
-Write-Host '  codex-api [-IncludeArchived]'
-Write-Host '  codex-openai [-IncludeArchived]'
-Write-Host '  codex-api -SwitchProvider [-IncludeArchived]'
-Write-Host '  codex-openai -SwitchProvider [-IncludeArchived]'
-Write-Host '  Show-CabbageSwitchStatus'
+Write-Host '  cabbage-switch             # list detected providers and the command to run'
+Write-Host '  cabbage-switch <provider>   # move active history to that provider bucket'
+Write-Host '  c-switch                    # short alias for cabbage-switch'
+Write-Host '  cs-status                   # show paths, providers, and history counts'
 Write-Host ''
 Write-Host 'Run this once in the current shell, or open a new PowerShell window:'
 Write-Host ". '$moduleTarget'"

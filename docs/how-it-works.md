@@ -15,19 +15,20 @@ Cabbage Switch fixes the local metadata so Codex Desktop can see the history und
 
 ## History-only switching
 
-The default commands only change history metadata:
+The default command only changes history metadata:
 
 ```powershell
-codex-api
-codex-openai
+cabbage-switch <provider>
 ```
 
-They do not call `cc-switch.exe`, do not change CC Switch's current provider, and do not rewrite `~\.codex\config.toml`.
+It does not call `cc-switch.exe`, does not change CC Switch's current provider, and does not rewrite `~\.codex\config.toml`.
+
+`<provider>` can be any Codex provider from CC Switch. You can match it by id, display name, or `model_provider` value. To see exactly what is available on this machine, run `cabbage-switch` with no argument: it lists every detected provider and the command to run for each.
 
 The flow is:
 
 ```text
-codex-api / codex-openai
+cabbage-switch <provider>
   -> Z_switch
     -> Resolve-CabbageCodexProviderSwitchId
     -> Resolve-CabbageHistoryProvider
@@ -36,9 +37,7 @@ codex-api / codex-openai
       -> Sync-CabbageCodexJsonlHistoryProvider
 ```
 
-`codex-openai` resolves to the history provider `openai`.
-
-`codex-api` resolves to the API/proxy provider's actual Codex `model_provider`. This is important because the provider may be named `tec-do`, `custom`, or something else. Cabbage Switch reads the provider config payload from `~\.cc-switch\cc-switch.db` and parses its `model_provider = "..."` line.
+`Resolve-CabbageHistoryProvider` returns the target `model_provider` for the chosen provider. For an official OpenAI login provider it is `openai`. For an API/proxy provider it is the provider's real Codex `model_provider`, read from the config payload stored in `~\.cc-switch\cc-switch.db`. This is important because the provider may be named `tec-do`, `custom`, or something else.
 
 If that config cannot be read, Cabbage Switch falls back to the current Codex config when it is custom-like, then finally to `custom`.
 
@@ -109,8 +108,7 @@ The backup uses Python's built-in `sqlite3` backup API rather than a raw file co
 Provider switching is opt-in:
 
 ```powershell
-codex-api -SwitchProvider
-codex-openai -SwitchProvider
+cabbage-switch <provider> -SwitchProvider
 ```
 
 This path changes both the active provider configuration and the local history metadata.
@@ -118,7 +116,7 @@ This path changes both the active provider configuration and the local history m
 The flow is:
 
 ```text
-codex-api -SwitchProvider / codex-openai -SwitchProvider
+cabbage-switch <provider> -SwitchProvider
   -> resolve target CC Switch provider id
   -> call cc-switch.exe
   -> write Codex config from CC Switch provider payload if needed
@@ -126,15 +124,7 @@ codex-api -SwitchProvider / codex-openai -SwitchProvider
   -> sync history metadata
 ```
 
-For the official OpenAI login provider, the CC Switch provider id is `default`.
-
-For API/proxy providers, Cabbage Switch reads `~\.cc-switch\cc-switch.db` and chooses:
-
-1. the current non-`default` Codex provider
-2. otherwise a non-`default` provider whose id or name looks like `api`, `custom`, `proxy`, `中转`, or `转发`
-3. otherwise the first non-`default` Codex provider
-
-After resolving the provider id, Cabbage Switch calls:
+The provider id passed to `cabbage-switch` is matched against CC Switch providers by id, display name, or `model_provider` value, so the same `<provider>` argument selects the right CC Switch provider on any machine. After resolving the id, Cabbage Switch calls:
 
 ```powershell
 cc-switch.exe -a codex provider switch <provider-id>
@@ -180,7 +170,7 @@ The JSON settings file is backed up before writing.
 
 Cabbage Switch keeps the default path narrow on purpose:
 
-- default commands only move history metadata
+- the default command only moves history metadata
 - `-SwitchProvider` is required before changing active provider config
 - SQLite writes create backups
 - JSONL writes preserve timestamps

@@ -4,7 +4,7 @@ This document is for an agent taking over maintenance of Cabbage Switch. Start h
 
 ## Project Purpose
 
-Cabbage Switch is a Windows PowerShell helper for Codex Desktop users who switch between an official OpenAI login provider and a CC Switch API/proxy provider.
+Cabbage Switch is a Windows PowerShell helper for Codex Desktop users who move conversation history between Codex providers (official OpenAI login and one or more API/proxy providers).
 
 Codex Desktop history is grouped by `model_provider` in two local stores:
 
@@ -13,7 +13,9 @@ Codex Desktop history is grouped by `model_provider` in two local stores:
 
 The main product rule is:
 
-**`codex-api` and `codex-openai` default to history-only sync. They must not switch CC Switch or rewrite `~\.codex\config.toml` unless the user passes `-SwitchProvider`.**
+**The default command is history-only. It must not switch CC Switch or rewrite `~\.codex\config.toml` unless the user passes `-SwitchProvider`.**
+
+Cabbage Switch is provider-agnostic: it lists every Codex provider it finds in `~\.cc-switch\cc-switch.db`, shows a command for each, and matches the argument you pass by id, display name, or `model_provider` value. There are no hardcoded `codex-api` / `codex-openai` command names, so the same tool works on a machine with one provider, two, or several proxies.
 
 ## Public Commands
 
@@ -25,13 +27,12 @@ Load the installed script from PowerShell:
 
 Commands:
 
-- `codex-api`: move active Codex Desktop history to the API/proxy provider's actual Codex `model_provider`, for example `tec-do`.
-- `codex-openai`: move active Codex Desktop history to `openai`.
-- `codex-default`: alias-style wrapper for `codex-openai`.
+- `cabbage-switch` (alias `c-switch`): with no argument, prints each detected Codex provider and the command to move history into it. With a provider argument, moves active Codex history to that provider's `model_provider` bucket.
 - `cs-status` / `Show-CabbageSwitchStatus`: show detected paths, CC Switch providers, and history counts.
 
 Options:
 
+- `<provider>`: the CC Switch provider id, display name, or `model_provider` value.
 - `-IncludeArchived`: also update archived Codex sessions and archived rows.
 - `-SwitchProvider`: opt in to switching the active provider through CC Switch and writing Codex config before syncing history.
 - `-HistoryOnly`: backward-compatible no-op. History-only is now the default.
@@ -52,7 +53,7 @@ Options:
 The command flow starts at the small wrappers near the bottom of `src/CabbageSwitch.ps1`:
 
 ```text
-codex-api / codex-openai
+cabbage-switch <provider>
   -> Z_switch
     -> Resolve-CabbageCodexProviderSwitchId
     -> Resolve-CabbageHistoryProvider
@@ -64,16 +65,16 @@ codex-api / codex-openai
 
 Provider resolution:
 
-- Official login maps to CC Switch provider id `default` and history provider `openai`.
-- API/proxy maps to a non-`default` CC Switch provider.
-- For API/proxy history, do not assume `custom`. Read the provider config payload from `~\.cc-switch\cc-switch.db` and use its real `model_provider`.
+- The `<provider>` argument is matched against CC Switch Codex providers by id, display name, or `model_provider` value.
+- An official login provider maps to history provider `openai`.
+- An API/proxy provider maps to its real `model_provider`, parsed from the config payload stored in `~\.cc-switch\cc-switch.db`.
 - If the provider config cannot be read, the fallback is the current Codex config provider when it is custom-like, then `custom`.
 
 ## Safety Rules
 
 Do not weaken these without a very good reason:
 
-- Default commands must be history-only.
+- The default command must be history-only.
 - `-SwitchProvider` is the only path that may invoke `cc-switch.exe`, update CC Switch current provider state, or write `~\.codex\config.toml`.
 - SQLite updates must create a backup under `~\.codex\backups\`.
 - JSONL updates must preserve file timestamps after writing.
@@ -107,19 +108,25 @@ Expected shape:
 openai
 ```
 
-Dry-run the default API history sync:
+List detected providers and commands:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command ". '.\src\CabbageSwitch.ps1'; codex-api -WhatIf"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ". '.\src\CabbageSwitch.ps1'; cabbage-switch"
+```
+
+Dry-run a history-only sync for the `default` provider:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command ". '.\src\CabbageSwitch.ps1'; cabbage-switch default -WhatIf"
 ```
 
 Dry-run the opt-in provider switch path:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command ". '.\src\CabbageSwitch.ps1'; codex-api -SwitchProvider -WhatIf"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ". '.\src\CabbageSwitch.ps1'; cabbage-switch default -SwitchProvider -WhatIf"
 ```
 
-The second command should include a `What if` line for switching the CC Switch provider, and should not actually change the provider.
+The last command should include a `What if` line for switching the CC Switch provider, and should not actually change the provider.
 
 Check formatting before committing:
 
@@ -147,8 +154,9 @@ Finally, load the installed script and smoke-test it:
 
 ```powershell
 . "$HOME\.cabbage-switch\CabbageSwitch.ps1"
-codex-api -WhatIf
-codex-api -SwitchProvider -WhatIf
+cabbage-switch
+cabbage-switch default -WhatIf
+cabbage-switch default -SwitchProvider -WhatIf
 cs-status
 ```
 
@@ -157,14 +165,14 @@ cs-status
 History appears missing after switching:
 
 - Run `cs-status`.
-- Confirm `CodexConfig`, `ApiHistoryProvider`, `state.sqlite`, and `jsonl` counts agree.
+- Confirm `CodexConfig`, the target provider's history bucket, `state.sqlite`, and `jsonl` counts agree.
 - Fully exit Codex Desktop from the tray or Task Manager, then reopen it.
 
-`codex-api` writes to `custom` even though Codex config uses a custom name:
+History lands in `custom` even though the Codex config uses a custom provider name:
 
-- Check `Resolve-CabbageHistoryProvider api`.
+- Check `Resolve-CabbageHistoryProvider <provider>`.
 - Inspect the CC Switch provider config in `~\.cc-switch\cc-switch.db`.
-- The API provider config should contain a `model_provider = "..."` line.
+- The provider config should contain a `model_provider = "..."` line.
 
 PowerShell command is not found:
 

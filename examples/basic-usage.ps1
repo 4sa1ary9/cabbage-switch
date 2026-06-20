@@ -3,16 +3,19 @@
 # Show detected Codex/CC Switch paths, providers, and history buckets.
 Show-CabbageSwitchStatus
 
-# Move active desktop history to the API/proxy provider.
-codex-api
+# List every Codex provider and the command to move history into it.
+cabbage-switch
+# short alias:
+c-switch
 
-# Move active desktop history to the official OpenAI login provider.
-codex-openai
+# Move active desktop history to a provider bucket.
+# <provider> can be the provider id, display name, or model_provider value.
+cabbage-switch default
+cabbage-switch tec-do
 
 # If you also want to switch the active provider through CC Switch, opt in explicitly.
-codex-api -SwitchProvider
-codex-openai -SwitchProvider
+cabbage-switch tec-do -SwitchProvider
 
 # Include archived threads when you intentionally want old archived history moved too.
-codex-api -IncludeArchived
-codex-openai -IncludeArchived
+cabbage-switch tec-do -IncludeArchived
+cabbage-switch default -IncludeArchived

@@ -30,8 +30,7 @@ Remove-Item "$HOME\.codex\state_5.sqlite-wal","$HOME\.codex\state_5.sqlite-shm" 
 Most mistakes can be fixed by syncing the desired bucket again:
 
 ```powershell
-codex-api
-codex-openai
+cabbage-switch <provider>
 ```
 
 Use `-IncludeArchived` only when archived threads should move too.
