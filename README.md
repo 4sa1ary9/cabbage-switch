@@ -166,3 +166,7 @@ examples/basic-usage.ps1   Daily usage examples
 docs/how-it-works.md       History and provider switching internals
 docs/restore.md            Restore notes
 ```
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
