@@ -1,5 +1,7 @@
 # Cabbage Switch
 
+**English** | **[简体中文](README.zh-CN.md)**
+
 PowerShell helper for moving Codex Desktop history between Codex providers. History-only sync is the default; full provider switching through CC Switch is opt-in.
 
 ## Goal

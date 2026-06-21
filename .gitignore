@@ -8,3 +8,8 @@ Thumbs.db
 *.sqlite-wal
 .vscode/
 .idea/
+
+# Local-only feedback and maintainer notes
+feedback/
+docs/superpowers/
+docs/agent-handoff.md
